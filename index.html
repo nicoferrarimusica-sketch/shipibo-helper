@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Shipibo">
+<meta name="theme-color" content="#7a3b00">
+<title>Shipibo Helper</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<style>
+:root{
+  --bg:#faf7f2; --card:#ffffff; --fg:#1d1b18; --muted:#6b645a; --line:#e3dccf;
+  --accent:#7a3b00; --accent-2:#a85a1a; --accent-bg:#f3e7d8; --ok:#2e7d4f; --warn:#b26b00; --bad:#b3261e;
+  --ship:#5a2a00;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#16130f; --card:#211c17; --fg:#efe9e1; --muted:#a59d92; --line:#3a332b;
+    --accent:#e0a064; --accent-2:#f0b47a; --accent-bg:#33261a; --ok:#6cc58f; --warn:#e9b45a; --bad:#f08a80;
+    --ship:#f3c18c;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#16130f; --card:#211c17; --fg:#efe9e1; --muted:#a59d92; --line:#3a332b;
+  --accent:#e0a064; --accent-2:#f0b47a; --accent-bg:#33261a; --ok:#6cc58f; --warn:#e9b45a; --bad:#f08a80;
+  --ship:#f3c18c;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg)}
+body{font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  padding:env(safe-area-inset-top) 0 calc(64px + env(safe-area-inset-bottom));-webkit-text-size-adjust:100%}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);
+  padding:10px 16px 8px;display:flex;align-items:center;gap:10px}
+header h1{font-size:18px;margin:0;flex:1}
+.pill{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--accent-bg);color:var(--accent);white-space:nowrap}
+.pill.ok{color:var(--ok)} .pill.warn{color:var(--warn)}
+main{padding:12px 16px;max-width:760px;margin:0 auto}
+section.view{display:none} section.view.on{display:block}
+nav{position:fixed;left:0;right:0;bottom:0;z-index:6;display:flex;background:var(--card);border-top:1px solid var(--line);
+  padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;border:0;background:none;color:var(--muted);font:600 11px/1.2 inherit;padding:8px 2px 9px;display:flex;flex-direction:column;align-items:center;gap:3px}
+nav button svg{width:22px;height:22px}
+nav button.on{color:var(--accent)}
+.row{display:flex;gap:8px;align-items:center}
+input[type=text],input[type=search],textarea,select{width:100%;font:inherit;font-size:16px;color:var(--fg);background:var(--card);
+  border:1px solid var(--line);border-radius:12px;padding:10px 12px;outline:none}
+textarea{min-height:84px;resize:vertical}
+input:focus,textarea:focus{border-color:var(--accent)}
+button.btn{font:600 15px inherit;border-radius:12px;border:1px solid var(--accent);background:var(--accent);color:#fff;padding:10px 14px;white-space:nowrap}
+button.btn.ghost{background:none;color:var(--accent)}
+button.btn.small{font-size:13px;padding:6px 10px;border-radius:10px}
+button.btn.danger{border-color:var(--bad);background:none;color:var(--bad)}
+button:disabled{opacity:.5}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin:10px 0}
+.card h3{margin:0 0 4px;font-size:15px}
+.src{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px}
+.hw{font-weight:700;color:var(--ship);font-size:17px}
+.entry{font-size:15px}
+.entry b{color:var(--ship)}
+.entry .ex{display:block;margin:4px 0 0 10px;padding-left:8px;border-left:2px solid var(--line);color:var(--fg)}
+.sub{margin-left:14px}
+.answer{white-space:pre-wrap;font-size:16px}
+.answer.thinking{color:var(--muted)}
+.muted{color:var(--muted);font-size:14px}
+.tiny{font-size:12px;color:var(--muted)}
+details summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:14px;margin:6px 0}
+.check{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line)}
+.check:last-child{border-bottom:0}
+.dot{width:22px;height:22px;flex:0 0 22px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;color:#fff;background:var(--muted)}
+.dot.ok{background:var(--ok)} .dot.bad{background:var(--bad)} .dot.warn{background:var(--warn)}
+progress{width:100%;height:10px;accent-color:var(--accent)}
+.grammar-text p{margin:.5em 0}
+.toc a{display:block;color:var(--fg);text-decoration:none;padding:7px 0;border-bottom:1px solid var(--line);font-size:15px}
+.toc a .n{color:var(--accent);font-weight:600;margin-right:6px}
+mark{background:var(--accent-bg);color:inherit;border-radius:3px;padding:0 1px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.chip{font-size:13px;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:5px 10px;color:var(--fg)}
+.rec{display:inline-flex;align-items:center;gap:6px}
+.rec .live{width:10px;height:10px;border-radius:50%;background:var(--bad);animation:blink 1s infinite}
+@keyframes blink{50%{opacity:.2}}
+audio{width:100%;margin-top:6px}
+.empty{text-align:center;color:var(--muted);padding:30px 10px}
+.pieces{border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin:6px 0 10px;background:var(--bg)}
+.pw{margin:8px 0 10px;padding-bottom:8px;border-bottom:1px dashed var(--line)}
+.pw:last-child{border-bottom:0}
+.pw input{font-size:15px;padding:7px 9px;border-radius:9px}
+.pgrid{display:grid;grid-template-columns:minmax(70px,30%) 1fr;gap:6px;margin-top:6px;align-items:center}
+.pgrid .pf{font-weight:700;color:var(--ship);font-size:14px;word-break:break-all}
+.p-mean.guess{color:var(--muted);font-style:italic}
+.taught{font-size:11px;color:var(--ok);border:1px solid var(--ok);border-radius:999px;padding:0 6px;margin-left:4px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Shipibo Helper</h1>
+  <span id="aiPill" class="pill">AI: off</span>
+</header>
+<main>
+  <!-- ASK -->
+  <section class="view on" id="v-ask">
+    <div class="row">
+      <input id="q" type="search" placeholder="Ask anything about Shipibo…" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="btn" id="askBtn">Ask</button>
+    </div>
+    <div class="chips" id="examples"></div>
+    <div id="answerCard" class="card" hidden>
+      <div class="src" id="answerLabel">Answer</div>
+      <div class="answer" id="answer"></div>
+      <div class="tiny" id="answerNote"></div>
+    </div>
+    <div id="askResults"></div>
+  </section>
+
+  <!-- DICTIONARY -->
+  <section class="view" id="v-dict">
+    <input id="dq" type="search" placeholder="Search Shipibo or English…" autocomplete="off" autocapitalize="off" spellcheck="false">
+    <div class="tiny" style="margin:6px 2px">Accents don't matter: type <i>jaskati</i> to find <i>jáskati</i>.</div>
+    <div id="dictResults"></div>
+  </section>
+
+  <!-- GRAMMAR -->
+  <section class="view" id="v-gram">
+    <input id="gq" type="search" placeholder="Search the grammar…" autocomplete="off" spellcheck="false">
+    <div id="gramResults"></div>
+    <div id="gramToc" class="toc"></div>
+    <div id="gramRead" hidden></div>
+  </section>
+
+  <!-- TEACH -->
+  <section class="view" id="v-teach">
+    <div class="card">
+      <h3 id="noteFormTitle">Teach it something new</h3>
+      <div class="muted" style="margin-bottom:8px">Everything you add is saved on this phone and used in every answer from now on.</div>
+      <label class="tiny">Shipibo (as you heard it)</label>
+      <textarea id="nShip" placeholder="e.g. a line from an icaro"></textarea>
+      <div class="row" style="margin:4px 0 8px"><button class="btn ghost small" id="bdBtn">Break it down word by word</button></div>
+      <div id="nPieces"></div>
+      <label class="tiny">What the whole phrase means</label>
+      <textarea id="nMean" placeholder="Meaning in English (or Spanish)"></textarea>
+      <label class="tiny">Context / notes</label>
+      <textarea id="nCtx" placeholder="Who sang it, when, what it is used for, how it was explained…"></textarea>
+      <label class="tiny">Tags (comma separated)</label>
+      <input id="nTags" type="text" placeholder="icaro, maestro, plant, ceremony…">
+      <div class="row" style="margin-top:10px;flex-wrap:wrap">
+        <button class="btn ghost small" id="recBtn">● Record audio</button>
+        <span id="recState" class="tiny"></span>
+      </div>
+      <audio id="nAudio" controls hidden></audio>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="saveNote">Save</button>
+        <button class="btn ghost" id="cancelNote" hidden>Cancel edit</button>
+      </div>
+    </div>
+    <input id="nq" type="search" placeholder="Search your notes…" autocomplete="off" spellcheck="false">
+    <div id="notesList"></div>
+  </section>
+
+  <!-- SETUP -->
+  <section class="view" id="v-setup">
+    <div class="card">
+      <h3>Offline readiness</h3>
+      <div class="muted">Do all of this <b>before</b> you lose signal. When every item is green, the app works with no internet.</div>
+      <div id="checks"></div>
+      <button class="btn small ghost" id="recheck" style="margin-top:8px">Check again</button>
+    </div>
+    <div class="card">
+      <h3>On-device AI</h3>
+      <div class="muted" id="gpuInfo"></div>
+      <label class="tiny">Model</label>
+      <select id="modelSel"></select>
+      <div class="row" style="margin-top:10px;flex-wrap:wrap">
+        <button class="btn" id="dlModel">Download &amp; start AI</button>
+        <button class="btn ghost small" id="delModel">Delete model</button>
+      </div>
+      <progress id="dlProg" value="0" max="1" hidden></progress>
+      <div class="tiny" id="dlText"></div>
+      <label class="row tiny" style="margin-top:10px"><input type="checkbox" id="autoAI" style="width:auto"> Start the AI automatically when the app opens</label>
+      <details style="margin-top:8px"><summary>Use a model you trained (training kit)</summary>
+        <div class="tiny" style="margin:4px 0 6px">Paste the Hugging Face address the training notebook printed, choose which model you trained from, then tap Save and "Download &amp; start AI" while online.</div>
+        <input id="cmUrl" type="text" placeholder="https://huggingface.co/your-name/shipibo-model" autocapitalize="off" spellcheck="false">
+        <select id="cmBase" style="margin-top:6px">
+          <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Trained from Llama 3.2 1B (q4f16)</option>
+          <option value="Qwen2.5-1.5B-Instruct-q4f16_1-MLC">Trained from Qwen 2.5 1.5B (q4f16)</option>
+        </select>
+        <button class="btn small" id="cmSave" style="margin-top:8px">Save</button>
+      </details>
+    </div>
+    <div class="card">
+      <h3>Backup your notes</h3>
+      <div class="muted">Save a backup file to the Files app regularly. You can restore it on any phone.</div>
+      <div class="row" style="margin-top:8px;flex-wrap:wrap">
+        <button class="btn" id="exportBtn">Export backup</button>
+        <label class="btn ghost" style="display:inline-block;cursor:pointer">Import backup<input id="importFile" type="file" accept=".json,application/json" hidden></label>
+      </div>
+      <div class="tiny" id="backupInfo"></div>
+    </div>
+    <div class="card">
+      <h3>About</h3>
+      <div class="muted">Sources: the finished Shipibo–English dictionary (both directions) and the plain-language edition of Valenzuela (2003), <i>Transitivity in Shipibo-Konibo Grammar</i>. The AI is small and can make mistakes — always check the sources it shows.</div>
+      <div class="tiny" id="ver"></div>
+    </div>
+  </section>
+</main>
+
+<nav>
+  <button data-v="ask" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>Ask</button>
+  <button data-v="dict"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h11a3 3 0 0 1 3 3v13H7a3 3 0 0 1-3-3z"/><path d="M4 17a3 3 0 0 1 3-3h11"/></svg>Dictionary</button>
+  <button data-v="gram"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 5h7a2 2 0 0 1 2 2v13a2 2 0 0 0-2-2H3z"/><path d="M21 5h-7a2 2 0 0 0-2 2v13a2 2 0 0 1 2-2h7z"/></svg>Grammar</button>
+  <button data-v="teach"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg>My notes</button>
+  <button data-v="setup"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Setup</button>
+</nav>
+<script type="module" src="app.js"></script>
+</body>
+</html>
