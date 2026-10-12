@@ -1,5 +1,5 @@
 // Shipibo Helper — offline dictionary + grammar search, personal notes, on-device AI.
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const WEBLLM = './vendor/web-llm-0.2.85.js';
 const MODELS = [
   { id: 'Llama-3.2-1B-Instruct', label: 'Lite — Llama 3.2 1B (~0.9 GB, most iPhones with 8 GB RAM)' },
@@ -175,7 +175,8 @@ function buildMorph() {
     const f = fold(m[1]); if (f.length >= 2) addTo(AFFIX, f, { k: 'gram', g });
   }
   TAUGHT_WORDS = new Map();
-  for (const n of DB.notes) {
+  const byTime = [...DB.notes].sort((a, b) => (a.updated || a.created || 0) - (b.updated || b.created || 0));
+  for (const n of byTime) {
     for (const w of n.pieces || []) if ((w.parts || []).length && w.parts.some((p) => p.meaning)) TAUGHT_WORDS.set(fold(w.word).replace(/[^a-zñ]/g, ''), { ...w, note: n });
     for (const w of tokens(n.ship)) addTo(STEMS, w, { k: 'note', n });
     for (const w of n.pieces || []) {
@@ -268,11 +269,11 @@ function rootKind(root) { // 'verb' | 'noun' | '' — used to choose the fitting
 }
 function pieceInfo(form, isRoot, ctx = '') {
   const seen = new Set();
-  const list = ((isRoot === 'pre' ? PREFIX : isRoot ? STEMS : AFFIX).get(form) || []).filter((x) => { const key = x.k + (x.k === 'att' ? 'a' + x.form : x.e ? 'e' + x.e.i : x.g ? 'g' + x.g.i : x.m ? 'm' + x.m.display + x.m.gloss : x.k === 'taught' ? 't' + x.n.id + x.form + x.meaning : 'n' + x.n.id);
+  const list = ((isRoot === 'pre' ? PREFIX : isRoot ? STEMS : AFFIX).get(form) || []).filter((x) => { const key = x.k + (x.k === 'att' ? 'a' + x.form : x.e ? 'e' + x.e.i : x.g ? 'g' + x.g.i : x.m ? 'm' + x.m.display + x.m.gloss : x.k === 'taught' ? 't' + fold(x.form) + '|' + x.meaning : 'n' + x.n.id);
     if (seen.has(key)) return false; seen.add(key); return true; });
   const fits = (x) => x.k === 'morph' && ctx && (ctx === 'verb' ? /^verb/.test(x.m.attaches) : /^noun/.test(x.m.attaches)) ? 1.5 : 0;
   const rank = (x) => (x.k === 'taught' ? 5 : x.k === 'morph' ? (x.m.gloss ? 3 : 2) : x.k === 'dict' ? 1 : x.k === 'att' ? (isRoot ? 0.5 : -1) : 0) + fits(x);
-  list.sort((a, b) => rank(b) - rank(a));
+  list.sort((a, b) => rank(b) - rank(a) || ((b.n && b.n.updated) || 0) - ((a.n && a.n.updated) || 0));
   return list.slice(0, 3).map((x) => x.k === 'att' ? (x.gl ? { label: '-' + x.form + ' in the grammar examples', text: ' : ' + Object.entries(x.gl).map(([g, n]) => `${plainLabel(g)} (${n}×)`).join(', '), ref: x, att: x }
       : { label: x.form + ' in the grammar examples', text: ' : ' + plainLabel(x.meaning), ref: x, att: x }) : x.k === 'taught' ? { label: x.form + ' (taught by you)', text: ' : ' + x.meaning, ref: x, taught: true } : x.k === 'dict' ? { label: x.e.h, text: x.e.t, ref: x } :
     x.k === 'gram' ? { label: '§' + x.g.s + ' ' + x.g.h, text: '', ref: x } :
@@ -300,7 +301,8 @@ function breakdownFor(q) {
   return out.some((x) => x.analyses[0].endings.length) ? out : [];
 }
 function glossOf(f, isRoot, ctx = '') {
-  const tg = ((isRoot === 'pre' ? PREFIX : isRoot ? STEMS : AFFIX).get(f) || []).find((x) => x.k === 'taught');
+  const tg = ((isRoot === 'pre' ? PREFIX : isRoot ? STEMS : AFFIX).get(f) || []).filter((x) => x.k === 'taught')
+    .sort((a, b) => (b.n.updated || 0) - (a.n.updated || 0))[0];   // the newest correction wins
   if (tg) return tg.meaning;                       // what the user taught always wins
   if (!isRoot) { // most frequent reading in the grammar's examples, unless context picks a grammar reading
     const a = (AFFIX.get(f) || []).find((x) => x.k === 'att');
@@ -337,7 +339,8 @@ function breakdownHtml(bd) {
       <table class="igt" style="margin:2px 0 2px 10px;font-size:14px"><tr><td><b>${esc(il.top)}</b></td></tr><tr><td style="font-size:14px">${esc(il.bottom)}</td></tr></table>${il.note ? `<div class="tiny" style="margin-left:10px">${esc(il.note)}</div>` : ''}${cells}</div>`;
   }).join('')).join('');
   return `<div class="card"><div class="src">Word breakdown</div>${rows}
-    <div class="tiny" style="margin-top:6px">Automatic split into root + endings. It can be wrong — if you know the real meaning, save it in My notes.</div></div>`;
+    <div class="tiny" style="margin-top:6px">Automatic split into root + endings. It can be wrong.</div>
+    <button class="btn ghost small fixBd" data-words="${esc(bd.map((x) => x.word).join(' '))}" style="margin-top:8px">✎ Wrong? Correct it</button></div>`;
 }
 function breakdownContext(bd) {
   return bd.map(({ word, analyses }) => {
@@ -494,11 +497,22 @@ async function aiAnswer(q, hits, bdText = '') {
   if (!out.trim()) box.textContent = '(no answer)';
 }
 
+let lastAsk = { q: '', words: '' };
+function openTeach(words, question) {
+  document.querySelector('nav button[data-v="teach"]').click();
+  resetForm();
+  $('#nShip').value = words || question || '';
+  if (question) $('#nCtx').value = `Corrected after asking: “${question}”`;
+  if (words) renderPieces(proposePieces(words));
+  window.scrollTo(0, 0);
+  const first = document.querySelector('#nPieces .p-mean') || $('#nMean'); if (first) first.focus();
+}
 // ---------------------------------------------------------------- ASK view
 async function ask() {
   const q = $('#q').value.trim(); if (!q || busy) return;
   busy = true; $('#askBtn').disabled = true;
   const { intent: it, hits, breakdown } = retrieve(q);
+  lastAsk = { q, words: breakdown.map((x) => x.word).join(' ') || (it.type === 'sh2en' ? it.term : '') };
   const terms = qtokens(it.term);
   $('#askResults').innerHTML = breakdownHtml(breakdown) + (hits.length ? `<div class="src" style="margin-top:12px">Sources (${hits.length})</div>` +
     hits.map((h) => resultCard(h, terms)).join('') : `<div class="empty">Nothing found in the dictionary, grammar or your notes.</div>`);
@@ -752,7 +766,9 @@ async function boot() {
   const ex = ['How do you say "river"?', 'What does jáskati mean?', 'What does -ra mean?', 'How do I give a command?', 'How do you say "thank you"?'];
   $('#examples').innerHTML = ex.map((x) => `<button class="chip">${esc(x)}</button>`).join('');
   $('#examples').onclick = (e) => { const b = e.target.closest('.chip'); if (b) { $('#q').value = b.textContent; ask(); } };
-  $('#askBtn').onclick = ask; $('#q').onkeydown = (e) => { if (e.key === 'Enter') ask(); };
+  $('#askBtn').onclick = ask;
+  $('#fixAnswer').onclick = () => openTeach(lastAsk.words, lastAsk.q);
+  $('#askResults').addEventListener('click', (e) => { const b = e.target.closest('.fixBd'); if (b) openTeach(b.dataset.words, lastAsk.q); }); $('#q').onkeydown = (e) => { if (e.key === 'Enter') ask(); };
   // dict / grammar
   let t1; $('#dq').oninput = () => { clearTimeout(t1); t1 = setTimeout(dictSearch, 180); }; dictSearch();
   let t2; $('#gq').oninput = () => { clearTimeout(t2); t2 = setTimeout(gramSearch, 220); };
