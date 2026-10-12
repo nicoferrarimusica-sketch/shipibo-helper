@@ -1,5 +1,5 @@
 // Shipibo Helper — offline dictionary + grammar search, personal notes, on-device AI.
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const WEBLLM = './vendor/web-llm-0.2.85.js';
 const MODELS = [
   { id: 'Llama-3.2-1B-Instruct', label: 'Lite — Llama 3.2 1B (~0.9 GB, most iPhones with 8 GB RAM)' },
@@ -198,8 +198,10 @@ function buildMorph() {
       if (fw && w.meaning) addTo(STEMS, fw, { k: 'taught', form: w.word, meaning: w.meaning, n, whole: true });
       (w.parts || []).forEach((pt, i) => {
         const f = fold(pt.form).replace(/[^a-zñ]/g, ''); if (!f || !pt.meaning) return;
-        const isRoot = pt.kind ? pt.kind === 'root' : i === 0;
-        addTo(isRoot ? STEMS : AFFIX, f, { k: 'taught', form: pt.form, meaning: pt.meaning, n, verb: !!pt.verb });
+        const isRoot = pt.kind ? pt.kind === 'root' : i === 0; const ff = (x) => fold(x).replace(/[^a-zñ]/g, '');
+        // where it was taught: a corrected ending ("picked") is used again in the same surroundings
+        addTo(isRoot ? STEMS : AFFIX, f, { k: 'taught', form: pt.form, meaning: pt.meaning, n, verb: !!pt.verb,
+          word: ff(w.word), prev: i ? ff(w.parts[i - 1].form) : '', root: ff(w.parts[0].form), ctxOnly: !!pt.picked && !isRoot });
       });
     }
   }
@@ -279,7 +281,7 @@ function analyzeAll(word, limit = 10) {
     const r = c.pre ? { root: c.pre + '-' + c.root, prefix: c.pre, stem: c.root, endings: c.endings, cost: c.cost } : { ...c };
     const key = (r.prefix ? r.prefix + '+' : '') + (r.root || '') + '|' + r.endings.join('-');
     if (seen.has(key)) { const prev = out.find((x) => (x.prefix ? x.prefix + '+' : '') + (x.root || '') + '|' + x.endings.join('-') === key); if (prev && c.author) prev.author = c.author; if (prev && c.taughtSplit) prev.taughtSplit = c.taughtSplit; if (prev && c.etyRec) prev.etyRec = c.etyRec; continue; }
-    seen.add(key); out.push(r);
+    seen.add(key); r.word = w; out.push(r);
     if (out.length === limit) break;
   }
   return out;
@@ -333,10 +335,21 @@ function breakdownFor(q) {
   out.order = order;
   return out.some((x) => x.analyses.some((a) => a.endings.length || !a.unknown)) ? out : [];
 }
-function glossOf(f, isRoot, ctx = '') {
-  const tg = ((isRoot === 'pre' ? PREFIX : isRoot ? STEMS : AFFIX).get(f) || []).filter((x) => x.k === 'taught')
-    .sort((a, b) => (b.n.updated || 0) - (a.n.updated || 0))[0];   // the newest correction wins
-  if (tg) return isRoot ? tg.meaning.replace(/^to\s+/i, '') : tg.meaning;   // what the user taught always wins
+// What you taught for a piece. Roots: the newest teaching. Endings you corrected in the word breakdown
+// count where they were taught (same word, then same ending before it, then same root); endings you
+// confirmed or defined in your dictionary count everywhere.
+const newestFirst = (a, b) => ((b.n && b.n.updated) || 0) - ((a.n && a.n.updated) || 0);
+function taughtMeaning(f, isRoot, c = {}) {
+  const L = ((isRoot === 'pre' ? PREFIX : isRoot ? STEMS : AFFIX).get(f) || []).filter((x) => x.k === 'taught' && x.meaning).sort(newestFirst);
+  if (!L.length) return null;
+  if (isRoot) return L[0].meaning;
+  const hit = (c.word && L.find((x) => x.word === c.word)) || (c.prev != null && L.find((x) => x.ctxOnly && x.prev === c.prev && x.root === c.root))
+    || (c.prev && L.find((x) => x.ctxOnly && x.prev === c.prev)) || L.find((x) => !x.ctxOnly) || (c.root && L.find((x) => x.ctxOnly && x.root === c.root));
+  return hit ? hit.meaning : null;
+}
+function glossOf(f, isRoot, ctx = '', c = {}) {
+  const tm = taughtMeaning(f, isRoot, c);
+  if (tm) return isRoot ? tm.replace(/^to\s+/i, '') : tm;   // what the user taught wins
   if (!isRoot) { // most frequent reading in the grammar's examples, unless context picks a grammar reading
     const a = (AFFIX.get(f) || []).find((x) => x.k === 'att');
     if (a) { const L = Object.entries(a.gl).sort((x, y) => y[1] - x[1]);
@@ -358,17 +371,16 @@ function shortPart(p) { // a part of a word history -> a short gloss ("suf. of c
   if (p.f.trim().startsWith('-')) { const L = AFFIX.get(f); if (L && L.some((x) => x.k === 'att' || x.k === 'morph')) return labelOf(f, false); }
   return (p.g || f).replace(/^(suf\.|pref\.|modifying|verbal|noun)\s*(suf\.\s*)?(of\s*)?/i, '').split(/[,;]/)[0].trim().replace(/\s+/g, '.') || f;
 }
-function labelOf(f, isRoot, ctx = '') {
-  if (isRoot) return glossOf(f, isRoot, ctx);
-  const tg = (AFFIX.get(f) || []).filter((x) => x.k === 'taught').sort((a, b) => (b.n.updated || 0) - (a.n.updated || 0))[0];
-  if (tg) return tg.meaning;
+function labelOf(f, isRoot, ctx = '', c = {}) {
+  if (isRoot) return glossOf(f, isRoot, ctx, c);
+  const tm = taughtMeaning(f, false, c); if (tm) return tm;
   const a = (AFFIX.get(f) || []).find((x) => x.k === 'att');
   if (a) { const L = Object.entries(a.gl).sort((x, y) => y[1] - x[1]);
     const fit = ctx && pieceInfo(f, false, ctx).find((x) => x.morph && x.morph.gloss && a.gl[x.morph.gloss]);
     return (fit ? fit.morph.gloss : L[0][0]).replace(/\*/g, ''); }
   const inf = pieceInfo(f, false, ctx)[0];
   if (inf && inf.morph && inf.morph.gloss) return inf.morph.gloss;
-  return glossOf(f, false, ctx);
+  return glossOf(f, false, ctx, c);
 }
 function readingOf(a) { // plain words: "well (I know it for sure)"
   const il = interlinear(a);
@@ -376,7 +388,14 @@ function readingOf(a) { // plain words: "well (I know it for sure)"
     const t = isLab ? plainLabel(g) : g.replace(/\./g, ' ');
     return i === 0 && !isLab ? t : `(${t})`; }).join(' ');
 }
-function interlinear(a) {
+function interlinear(a) {   // a.over = {piece index: meaning} picked by the user in the breakdown
+  const il = interlinear0(a); if (!a.over) return il;
+  const tops = il.top.split('-'); const bots = il.bottom.split(/-(?![^(]*\))/);
+  if (tops.length !== bots.length) return il;
+  for (const [i, v] of Object.entries(a.over)) if (v && bots[i] != null) bots[i] = String(v).trim().replace(/\s+/g, '.');
+  return { ...il, bottom: bots.join('-') };
+}
+function interlinear0(a) {
   const parts = partsOf(a);
   if (a.taughtSplit) return { top: a.taughtSplit.parts.map((p) => p.form).join('-'),
     bottom: glossJoin(a.taughtSplit.parts.map((p, i) => [p.meaning || '?', i === 0])), note: 'as you taught it' + (a.taughtSplit.meaning ? ` — “${a.taughtSplit.meaning}”` : '') };
@@ -384,7 +403,9 @@ function interlinear(a) {
     note: `the dictionary's word history of ${a.etyRec.h}: “${a.etyRec.mean}”` };
   if (a.author) return { top: a.author.split, bottom: a.author.gloss, note: 'as analysed in the grammar, p. ' + a.author.page };
   const ctx = a.root ? rootKind(a.stem || a.root) : '';
-  return { top: parts.map(([f]) => f).join('-'), bottom: glossJoin(parts.map(([f, r]) => [r === true && a.unknown ? '?' : labelOf(f, r, ctx), r === true])) };
+  const root = a.stem || a.root || '';
+  return { top: parts.map(([f]) => f).join('-'), bottom: glossJoin(parts.map(([f, r], i) => [r === true && a.unknown ? (taughtMeaning(f, true) || '?')
+    : labelOf(f, r, ctx, { word: a.word, prev: i ? parts[i - 1][0] : '', root }), r === true])) };
 }
 function relatedWords(root) {
   if (!root) return [];
@@ -415,20 +436,74 @@ function guessReason(a) { // a few plain words on where this analysis comes from
   return `guess: root from ${rs}, endings from ${es}`;
 }
 let CHOICES = { words: [], order: [] };   // the analyses shown, so the user's pick can be saved
+// every meaning a piece could have here, best first (the current guess, your teaching, the grammar, the dictionary)
+function pieceChoices(f, r, ctxK, cur) {
+  const out = []; const add = (v, why) => { v = String(v || '').replace(/\*/g, '').trim(); if (!v || v === '?' || out.some((o) => o.v === v)) return; out.push({ v, why }); };
+  add(cur, 'current guess');
+  const L = (r === 'pre' ? PREFIX : r ? STEMS : AFFIX).get(f) || [];
+  for (const x of L.filter((y) => y.k === 'taught').sort(newestFirst)) add(r === true ? x.meaning.replace(/^to\s+/i, '') : x.meaning, 'taught by you');
+  if (r === false) {
+    const a = L.find((x) => x.k === 'att');
+    if (a) for (const [g, n] of Object.entries(a.gl).sort((x, y) => y[1] - x[1])) if (/[A-Za-z]/.test(g)) add(g.replace(/[\]\[]/g, ''), `${n}× in the grammar examples`);
+    for (const x of L.filter((y) => y.k === 'morph')) add(x.m.gloss || x.m.meaning.split(/[\/;,(]/)[0].slice(0, 40), x.m.meaning.slice(0, 60));
+    for (const x of L.filter((y) => y.k === 'dict')) for (const g of shortGloss(x.e.t).split(';').slice(0, 2)) if (!/\bsuf\.|^-/.test(g)) add(g, 'dictionary');
+  } else {
+    for (const inf of pieceInfo(f, r, ctxK)) {
+      const t = inf.derived ? inf.derived.mean.split(/[(;]/)[0] : inf.etyp ? inf.etyp.meaning : inf.att ? plainLabel(inf.att.meaning)
+        : inf.morph ? (inf.morph.gloss ? plainLabel(inf.morph.gloss) : inf.morph.meaning.split(/[\/;,(]/)[0]) : inf.taught ? '' : shortGloss(inf.text);
+      for (const g of String(t).split(';').slice(0, 3)) add(g.replace(/^to\s+/i, '').slice(0, 50), inf.label);
+    }
+  }
+  return out;
+}
+function pieceEditorHtml(a, wi, k) {
+  const parts = partsOf(a); const bots = interlinear(a).bottom.split(/-(?![^(]*\))/);
+  const ctxK = a.root ? rootKind(a.stem || a.root) : '';
+  const isLab = (v) => v === v.toUpperCase() && /[A-Z]/.test(v);
+  const optText = (o) => (isLab(o.v) ? `${o.v} — ${plainLabel(o.v)}` : o.v) + (o.why && o.why !== 'current guess' ? `  (${o.why})` : '');
+  return `<div class="pieceEd" data-wi="${wi}" data-k="${k}"><div class="tiny" style="margin:6px 0 2px">Check each piece — change any meaning that's wrong:</div>` +
+    parts.map(([f, r], i) => {
+      const cur = (bots[i] || '').replace(/\./g, ' ');
+      const ch = pieceChoices(f, r, ctxK, cur === '?' ? '' : cur);
+      const others = r === false ? Object.keys(DB.labels).filter((g) => !ch.some((o) => o.v === g)).sort((x, y) => /^\d/.test(x) - /^\d/.test(y) || x.localeCompare(y)) : [];
+      return `<div class="prow"><span class="pf">${r === 'pre' ? esc(f) + '-' : r ? esc(f) : '-' + esc(f)}</span>
+        <select class="pc" data-pi="${i}">${cur === '?' ? '<option value="">? (unknown — pick or type)</option>' : ''}${ch.map((o) => `<option value="${esc(o.v)}">${esc(optText(o))}</option>`).join('')}
+        ${others.length ? `<optgroup label="Other ending meanings">${others.map((g) => `<option value="${esc(g)}">${esc(g)} — ${esc(DB.labels[g])}</option>`).join('')}</optgroup>` : ''}
+        <option value="__own">✎ Type my own meaning…</option></select>
+        <input class="pc-own" data-pi="${i}" hidden placeholder="meaning of ${r === true ? '“' + esc(f) + '”' : '-' + esc(f)} here"></div>`;
+    }).join('') + '</div>';
+}
+function bdOptionRefresh(wi, k) {
+  const a = CHOICES.words[wi].analyses[k]; const el = document.querySelector(`.opt[data-wi="${wi}"][data-k="${k}"]`); if (!el) return;
+  el.querySelector('.ilb').textContent = interlinear(a).bottom; el.querySelector('.ird').textContent = '≈ ' + readingOf(a);
+  bdPhraseUpdate();
+}
+function bdPieceChange(t) {
+  const ed = t.closest('.pieceEd'); const wi = +ed.dataset.wi; const k = +ed.dataset.k; const pi = +t.dataset.pi;
+  const a = CHOICES.words[wi].analyses[k]; a.over = a.over || {};
+  if (t.matches('select.pc')) {
+    const own = ed.querySelector(`.pc-own[data-pi="${pi}"]`); own.hidden = t.value !== '__own';
+    if (t.value === '__own') { own.focus(); return; }
+    if (t.selectedIndex === 0 && !a.over[pi]) return;
+    a.over[pi] = t.value;
+  } else a.over[pi] = t.value.trim();
+  if (!a.over[pi]) delete a.over[pi];
+  const r = document.querySelector(`input[name="bdw${wi}"][value="${k}"]`); if (r) r.checked = true;
+  bdOptionRefresh(wi, k);
+}
 function breakdownHtml(bd) {
   if (!bd.length) return '';
   CHOICES = { words: bd.map((x) => ({ word: x.word, analyses: x.analyses })), order: bd.order && bd.order.length ? bd.order : bd.map((x) => x.word) };
   const blocks = bd.map(({ word, analyses }, wi) => {
     const opts = analyses.map((a, k) => {
       const il = interlinear(a); const parts = partsOf(a);
-      const unknownRoot = a.unknown && a.root;
-      return `<label class="opt"><input type="radio" name="bdw${wi}" value="${k}">
-        <span><b class="hw" style="font-size:15px">${esc(il.top)}</b> <span class="lab">${esc(il.bottom)}</span>
-        <span class="tiny" style="display:block">≈ ${esc(readingOf(a))}</span>
+      return `<label class="opt" data-wi="${wi}" data-k="${k}"><input type="radio" name="bdw${wi}" value="${k}">
+        <span><b class="hw" style="font-size:15px">${esc(il.top)}</b> <span class="lab ilb">${esc(il.bottom)}</span>
+        <span class="tiny ird" style="display:block">≈ ${esc(readingOf(a))}</span>
         <span class="tiny" style="display:block;color:var(--muted)">${esc(guessReason(a))}</span>
         ${relatedLine(a) ? `<span class="tiny" style="display:block;color:var(--muted)">${esc(relatedLine(a))}</span>` : ''}
         ${a.root ? `<button class="btn ghost small explainBtn" data-root="${esc(a.stem || a.root)}" data-wi="${wi}" data-k="${k}" style="margin-top:4px">＋ Explain “${esc(a.stem || a.root)}” in my dictionary</button>` : ''}
-        ${a.root ? `<input class="root-mean" data-wi="${wi}" data-k="${k}" hidden placeholder="meaning of “${esc(a.stem || a.root)}” here${unknownRoot ? '' : ' (optional — leave empty to keep the dictionary meaning)'}">` : ''}</span></label>`;
+        ${pieceEditorHtml(a, wi, k)}</span></label>`;
     }).join('');
     return `<div class="wb" data-wi="${wi}"><div class="src" style="margin-top:10px">${esc(word)} — ${analyses.length} possible split${analyses.length === 1 ? '' : 's'}</div>${opts}
       <label class="opt"><input type="radio" name="bdw${wi}" value="none"><span class="tiny">None of these — I'll type the right one</span></label></div>`;
@@ -441,7 +516,7 @@ function breakdownHtml(bd) {
       return `<div class="tiny" style="margin-left:10px">• <b>${r === 'pre' ? esc(f) + '-' : r ? esc(f) : '-' + esc(f)}</b>${txt ? ' — ' + txt : ' — not found'}</div>`; }).join('') + '</div>'; }).join('');
   return `<div class="card" id="bdCard"><div class="src">Word breakdown</div>
     <div id="bdPhrase"></div>
-    <div class="tiny" style="margin:6px 0 2px">Tap the right split for each word, then save — it learns from your choice.</div>
+    <div class="tiny" style="margin:6px 0 2px">Tap the right split for each word. Under it, fix the meaning of any piece (e.g. make -ax mean “in / at” instead of “after”). Then save — it learns from your choices.</div>
     ${blocks}
     <button class="btn small" id="bdSave" style="margin-top:10px">✓ Save my choices (it learns from them)</button>
     <details style="margin-top:8px"><summary>Details for every piece of the best guess</summary>${rows}</details></div>`;
@@ -463,9 +538,10 @@ async function bdSave(question) {
     const el = document.querySelector(`input[name="bdw${wi}"]:checked`); if (!el) return;
     if (el.value === 'none') { none.push(w.word); return; }
     const k = +el.value; const a = w.analyses[k]; const il = interlinear(a); const labs = il.bottom.split(/-(?![^(]*\))/);
-    const typed = (document.querySelector(`.root-mean[data-wi="${wi}"][data-k="${k}"]`) || {}).value || '';
+    const over = a.over || {};
     const parts = partsOf(a).map(([f, r], i) => ({ form: f, kind: r === 'pre' ? 'prefix' : r ? 'root' : 'suffix',
-      meaning: r === true ? (typed.trim() || (labs[i] && labs[i] !== '?' ? labs[i].replace(/\./g, ' ') : '')) : (labs[i] || '').replace(/\*/g, ''), verb: r === true && rootKind(a.stem || a.root) === 'verb' }));
+      meaning: r === true ? (labs[i] && labs[i] !== '?' ? labs[i].replace(/\./g, ' ') : '') : (labs[i] || '').replace(/\*/g, ''),
+      verb: r === true && rootKind(a.stem || a.root) === 'verb', ...(over[i] ? { picked: true } : {}) }));
     pieces.push({ word: w.word, meaning: '', parts });
   });
   if (!pieces.length && !none.length) { alert('Tap the right split for at least one word first.'); return; }
@@ -848,8 +924,8 @@ function proposePieces(text, existing = []) {
     const a = analyze(w)[0];
     const pp = a ? partsOf(a) : [[fw, true]];
     const ctx = a && a.root ? rootKind(a.stem || a.root) : '';
-    const parts = pp.map(([f, isRoot]) => ({ form: f, kind: isRoot === 'pre' ? 'prefix' : isRoot ? 'root' : 'suffix',
-      meaning: a ? glossOf(f, isRoot, ctx) : '', guess: true }));
+    const parts = pp.map(([f, isRoot], i) => ({ form: f, kind: isRoot === 'pre' ? 'prefix' : isRoot ? 'root' : 'suffix',
+      meaning: a ? glossOf(f, isRoot, ctx, { word: fold(w).replace(/[^a-zñ]/g, ''), prev: i ? pp[i - 1][0] : '', root: a.stem || a.root || '' }) : '', guess: true }));
     out.push({ word: w, meaning: '', parts, guessed: true });
   }
   return out;
@@ -1065,11 +1141,11 @@ async function boot() {
   $('#askResults').addEventListener('click', (e) => { const b = e.target.closest('.fixBd'); if (b) openTeach(b.dataset.words, lastAsk.q);
     if (e.target.closest('#bdSave')) bdSave(lastAsk.q);
     const ex = e.target.closest('.explainBtn'); if (ex) { e.preventDefault();
-      const typed = (document.querySelector(`.root-mean[data-wi="${ex.dataset.wi}"][data-k="${ex.dataset.k}"]`) || {}).value || '';
-      openEntry(ex.dataset.root, typed, lastAsk.q); } });
-  $('#askResults').addEventListener('change', (e) => { if (!e.target.matches('#bdCard input[type=radio]')) return;
-    const wb = e.target.closest('.wb'); wb.querySelectorAll('.root-mean').forEach((i) => { i.hidden = i.dataset.k !== e.target.value; });
-    bdPhraseUpdate(); }); $('#q').onkeydown = (e) => { if (e.key === 'Enter') ask(); };
+      const a = CHOICES.words[+ex.dataset.wi].analyses[+ex.dataset.k]; const ri = partsOf(a).findIndex(([, r]) => r === true);
+      openEntry(ex.dataset.root, (a.over && a.over[ri]) || '', lastAsk.q); } });
+  $('#askResults').addEventListener('change', (e) => {
+    if (e.target.matches('#bdCard .pc, #bdCard .pc-own')) { bdPieceChange(e.target); return; }
+    if (e.target.matches('#bdCard input[type=radio]')) bdPhraseUpdate(); }); $('#q').onkeydown = (e) => { if (e.key === 'Enter') ask(); };
   // dict / grammar
   let t1; $('#dq').oninput = () => { clearTimeout(t1); t1 = setTimeout(dictSearch, 180); }; dictSearch();
   let t2; $('#gq').oninput = () => { clearTimeout(t2); t2 = setTimeout(gramSearch, 220); };

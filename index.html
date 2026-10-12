@@ -94,7 +94,12 @@ audio{width:100%;margin-top:6px}
 .p-mean.guess{color:var(--muted);font-style:italic}
 .opt{display:flex;gap:8px;align-items:flex-start;padding:7px 4px;border-bottom:1px solid var(--line);cursor:pointer}
 .opt input[type=radio]{width:auto;margin-top:4px;accent-color:var(--accent)}
-.opt .root-mean{margin-top:4px;font-size:14px;padding:6px 8px}
+.opt .pieceEd{display:none;margin-top:4px}
+.opt:has(input[type=radio]:checked) .pieceEd{display:block}
+.prow{display:flex;gap:6px;align-items:center;margin:3px 0;flex-wrap:wrap}
+.prow .pf{flex:0 0 auto;min-width:54px;font-weight:600}
+.prow select{flex:1 1 160px;min-width:0;font-size:14px;padding:5px 6px}
+.prow .pc-own{flex:1 1 100%;font-size:14px;padding:6px 8px}
 .lab{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--fg)}
 table.list{border-collapse:collapse;width:100%;font-size:14px}
 table.list th{text-align:left;font-size:12px;color:var(--muted);border-bottom:1px solid var(--line);padding:4px}
