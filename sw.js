@@ -1,5 +1,5 @@
 // Offline cache for Shipibo Helper. Bump VERSION (and app.js VERSION) on every release.
-const VERSION = '1.7.0';
+const VERSION = '1.7.1';
 const CACHE = 'shipibo-helper-' + VERSION;
 const FILES = ['./', 'index.html', 'app.js', 'manifest.webmanifest',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',

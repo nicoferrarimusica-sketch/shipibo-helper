@@ -1,5 +1,5 @@
 // Shipibo Helper — offline dictionary + grammar search, personal notes, on-device AI.
-const VERSION = '1.7.0';
+const VERSION = '1.7.1';
 const WEBLLM = './vendor/web-llm-0.2.85.js';
 const MODELS = [
   { id: 'Llama-3.2-1B-Instruct', label: 'Lite — Llama 3.2 1B (~0.9 GB, most iPhones with 8 GB RAM)' },
@@ -1102,7 +1102,7 @@ const CACHE_NAME = () => 'shipibo-helper-' + VERSION;
 
 // ---------------------------------------------------------------- boot
 async function boot() {
-  $('#ver').textContent = `Version ${VERSION}`;
+  $('#ver').textContent = `Version ${VERSION}`; $('#hver').textContent = 'v' + VERSION;
   // navigation
   document.querySelectorAll('nav button').forEach((b) => b.onclick = () => {
     document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('on', x === b));
