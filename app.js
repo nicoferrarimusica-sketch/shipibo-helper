@@ -1,5 +1,5 @@
 // Shipibo Helper — offline dictionary + grammar search, personal notes, on-device AI.
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const WEBLLM = './vendor/web-llm-0.2.85.js';
 const MODELS = [
   { id: 'Llama-3.2-1B-Instruct', label: 'Lite — Llama 3.2 1B (~0.9 GB, most iPhones with 8 GB RAM)' },
@@ -18,7 +18,8 @@ const fold = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toL
 const STOP = new Set(('a an the of to in on at for from by with and or but is are was were be been it its this that these those ' +
   'what which who whom how do does did say said mean means meaning word words shipibo konibo shipibo-konibo english spanish ' +
   'you your i me my we us our can could would should please tell about there here as into than then so if not no yes ' +
-  'translate translation called call use used using when where why').split(' '));
+  'translate translation called call use used using when where why ' +
+  'maestro maestros maestra icaro icaros sing sings sang sung singing song songs phrase line verse ceremony').split(' '));
 function stem(w) { // light English stemming so "commands"/"commanding" match "command"
   if (w.length <= 4) return w;
   if (w.endsWith('ies')) return w.slice(0, -3) + 'y';
@@ -158,7 +159,7 @@ function buildMorph() {
   }
   for (const [f, gl] of Object.entries(DB.att.stems || {})) {
     const [top, n] = Object.entries(gl).sort((a, b) => b[1] - a[1])[0];
-    addTo(STEMS, f, { k: 'att', form: f, meaning: top.replace(/\./g, ' '), n });
+    addTo(STEMS, f, { k: 'att', form: f, meaning: top, n });
   }
   for (const [f, gl] of Object.entries(DB.att.affix || {})) {
     const n = Object.values(gl).reduce((a, b) => a + b, 0);
@@ -272,7 +273,7 @@ function pieceInfo(form, isRoot, ctx = '') {
   const list = ((isRoot === 'pre' ? PREFIX : isRoot ? STEMS : AFFIX).get(form) || []).filter((x) => { const key = x.k + (x.k === 'att' ? 'a' + x.form : x.e ? 'e' + x.e.i : x.g ? 'g' + x.g.i : x.m ? 'm' + x.m.display + x.m.gloss : x.k === 'taught' ? 't' + fold(x.form) + '|' + x.meaning : 'n' + x.n.id);
     if (seen.has(key)) return false; seen.add(key); return true; });
   const fits = (x) => x.k === 'morph' && ctx && (ctx === 'verb' ? /^verb/.test(x.m.attaches) : /^noun/.test(x.m.attaches)) ? 1.5 : 0;
-  const rank = (x) => (x.k === 'taught' ? 5 : x.k === 'morph' ? (x.m.gloss ? 3 : 2) : x.k === 'dict' ? 1 : x.k === 'att' ? (isRoot ? 0.5 : -1) : 0) + fits(x);
+  const rank = (x) => (x.k === 'taught' ? 5 : x.k === 'morph' ? (x.m.gloss ? 3 : 2) : x.k === 'dict' ? 1 : x.k === 'att' ? (isRoot ? (x.n >= 3 && !/^[A-Z]/.test(x.meaning) ? 1.5 : /^[A-Z]/.test(x.meaning) ? -0.5 : 0.5) : -1) : 0) + fits(x);   // a root glossed 3+ times in the examples beats a look-alike dictionary word
   list.sort((a, b) => rank(b) - rank(a) || ((b.n && b.n.updated) || 0) - ((a.n && a.n.updated) || 0));
   return list.slice(0, 3).map((x) => x.k === 'att' ? (x.gl ? { label: '-' + x.form + ' in the grammar examples', text: ' : ' + Object.entries(x.gl).map(([g, n]) => `${plainLabel(g)} (${n}×)`).join(', '), ref: x, att: x }
       : { label: x.form + ' in the grammar examples', text: ' : ' + plainLabel(x.meaning), ref: x, att: x }) : x.k === 'taught' ? { label: x.form + ' (taught by you)', text: ' : ' + x.meaning, ref: x, taught: true } : x.k === 'dict' ? { label: x.e.h, text: x.e.t, ref: x } :
@@ -288,16 +289,18 @@ function shortGloss(t) { // first definition(s) from an entry: the " : "-separat
 }
 function breakdownFor(q) {
   const words = (q.match(/[A-Za-zÀ-ÿñÑ'’-]+/g) || []).filter((w) => w.length >= 3 && !STOP.has(fold(w)));
-  const out = []; const done = new Set();
+  const out = []; const done = new Set(); const order = [];
   for (const w of words) {
     const fw = fold(w).replace(/[^a-zñ]/g, '');
-    if (done.has(fw)) continue; done.add(fw);
+    if (done.has(fw)) { if (out.some((x) => fold(x.word).replace(/[^a-zñ]/g, '') === fw)) order.push(w); continue; } done.add(fw);
     if (DB.index.some((x) => fold(x.e) === fw)) continue;     // looks English
     if (/^[-–]/.test(w)) continue;                             // asking about an ending itself
     const an = analyze(w); if (!an.length) continue;
+    order.push(w);
     out.push({ word: w, analyses: an });
   }
   // only worth showing when some word really splits into root + endings
+  out.order = order;
   return out.some((x) => x.analyses[0].endings.length) ? out : [];
 }
 function glossOf(f, isRoot, ctx = '') {
@@ -326,8 +329,29 @@ function interlinear(a) {
   const ctx = a.root ? rootKind(a.stem || a.root) : '';
   return { top: parts.map(([f]) => f).join('-'), bottom: glossJoin(parts.map(([f, r]) => [glossOf(f, r, ctx), r === true])) };
 }
+function guessReason(a) { // a few plain words on where this analysis comes from
+  if (a.taughtSplit) return 'as you taught it';
+  if (a.author) return `the grammar's own analysis (p. ${a.author.page})`;
+  const parts = partsOf(a); const root = parts.find(([, r]) => r === true);
+  const src = (L) => { const k = new Set(L.map((x) => x.k)); return k.has('taught') ? 'your notes' : k.has('dict') ? 'the dictionary' : k.has('att') ? 'the grammar examples' : k.has('morph') ? 'the grammar' : k.has('note') ? 'your notes' : 'a guess'; };
+  if (!root) return 'endings only — no root found';
+  const rs = src(STEMS.get(root[0]) || []);
+  if (parts.length === 1) return `a whole word from ${rs}`;
+  const ends = parts.filter(([, r]) => r === false).map(([f]) => AFFIX.get(f) || []);
+  const es = ends.some((L) => L.some((x) => x.k === 'taught')) ? 'your notes' : 'the grammar';
+  return `guess: root from ${rs}, endings from ${es}`;
+}
 function breakdownHtml(bd) {
   if (!bd.length) return '';
+  // 1. quick read: the whole phrase in one line, then one line per word with why
+  const firsts = bd.map(({ word, analyses }) => ({ word, a: analyses[0], il: interlinear(analyses[0]) }));
+  const order = (bd.order && bd.order.length ? bd.order : firsts.map((x) => x.word));
+  const byWord = (w) => firsts.find((x) => fold(x.word) === fold(w)) || firsts[0];
+  const phrase = order.map((w) => byWord(w).il.bottom.replace(/ - /g, '-')).join('  ·  ');
+  const quick = `<div style="font-size:15px;margin:4px 0 6px"><b>${esc(order.join(' '))}</b><br>≈ ${esc(phrase)}</div>` +
+    firsts.map((x) => `<div style="margin:3px 0 3px 4px;font-size:14px">• <span class="hw" style="font-size:15px">${esc(x.il.top)}</span> = ${esc(x.il.bottom)}
+      <div class="tiny" style="margin-left:14px">${esc(guessReason(x.a))}</div></div>`).join('');
+  // 2. details for every piece (folded)
   const rows = bd.map(({ word, analyses }) => analyses.map((a, k) => {
     const parts = partsOf(a);
     const ctxK = a.root ? rootKind(a.stem || a.root) : '';
@@ -338,8 +362,9 @@ function breakdownHtml(bd) {
     return `<div style="margin-top:8px"><span class="hw">${esc(word)}</span> ${k ? '<span class="tiny">(another possible split)</span>' : ''}
       <table class="igt" style="margin:2px 0 2px 10px;font-size:14px"><tr><td><b>${esc(il.top)}</b></td></tr><tr><td style="font-size:14px">${esc(il.bottom)}</td></tr></table>${il.note ? `<div class="tiny" style="margin-left:10px">${esc(il.note)}</div>` : ''}${cells}</div>`;
   }).join('')).join('');
-  return `<div class="card"><div class="src">Word breakdown</div>${rows}
-    <div class="tiny" style="margin-top:6px">Automatic split into root + endings. It can be wrong.</div>
+  return `<div class="card"><div class="src">Quick read</div>${quick}
+    <details style="margin-top:6px"><summary>Show details for every piece</summary>${rows}
+      <div class="tiny" style="margin-top:6px">Automatic split into root + endings. It can be wrong.</div></details>
     <button class="btn ghost small fixBd" data-words="${esc(bd.map((x) => x.word).join(' '))}" style="margin-top:8px">✎ Wrong? Correct it</button></div>`;
 }
 function breakdownContext(bd) {
@@ -482,7 +507,8 @@ Rules:
 - Copy Shipibo words exactly as they are written in the material. Never invent Shipibo words or meanings.
 - If the material does not contain the answer, say so plainly and suggest what to look up.
 - Prefer the user's own notes when they are relevant, and say when you are using them.
-- Keep answers short and clear (a few sentences), in simple English.`;
+- Keep answers short and clear (a few sentences), in simple English.
+- When the question contains Shipibo words and a word breakdown is given, START with one line "Quick read:" giving a literal reading of the whole phrase, then one short line per word (its parts and their meanings, in the same style as the breakdown), then a brief explanation of what it probably means. Say clearly when it is a guess.`;
 
 async function aiAnswer(q, hits, bdText = '') {
   const ctx = contextFor(hits, 5500 - bdText.length);
