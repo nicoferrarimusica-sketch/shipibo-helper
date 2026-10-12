@@ -164,6 +164,23 @@ table.list td{vertical-align:top;border-bottom:1px solid var(--line);padding:6px
         <button class="btn ghost" id="cancelNote" hidden>Cancel edit</button>
       </div>
     </div>
+    <details class="card" id="entryCard"><summary style="font-size:15px">＋ Add a word to my dictionary</summary>
+      <div class="muted" style="margin:6px 0">Explain a word in your own words. It becomes a real dictionary entry: its meaning and type are used to read new words, and your example joins the example sentences.</div>
+      <label class="tiny">Shipibo word or root (e.g. kano, or -keax for an ending)</label>
+      <input id="eRoot" type="text" autocapitalize="off" spellcheck="false">
+      <label class="tiny">Short meaning (e.g. to connect)</label>
+      <input id="eMean" type="text">
+      <label class="tiny">Type of word</label>
+      <select id="eType"><option value="">(guess for me)</option><option value="verb">action word (verb)</option><option value="noun">thing / person / place (noun)</option>
+        <option value="describing">describing word</option><option value="ending">ending (suffix)</option><option value="other">other</option></select>
+      <label class="tiny">Explain it in your own words — how it's used, what the maestro said, related words</label>
+      <textarea id="eExplain"></textarea>
+      <label class="tiny">Example sentence in Shipibo (optional)</label>
+      <input id="eExS" type="text" autocapitalize="off" spellcheck="false">
+      <label class="tiny">Its translation</label>
+      <input id="eExE" type="text">
+      <button class="btn" id="eSave" style="margin-top:10px">Add to my dictionary</button>
+    </details>
     <input id="nq" type="search" placeholder="Search your notes…" autocomplete="off" spellcheck="false">
     <div id="notesList"></div>
   </section>

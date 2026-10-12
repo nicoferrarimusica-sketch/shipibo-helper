@@ -1,5 +1,5 @@
 // Shipibo Helper — offline dictionary + grammar search, personal notes, on-device AI.
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 const WEBLLM = './vendor/web-llm-0.2.85.js';
 const MODELS = [
   { id: 'Llama-3.2-1B-Instruct', label: 'Lite — Llama 3.2 1B (~0.9 GB, most iPhones with 8 GB RAM)' },
@@ -55,7 +55,8 @@ function highlight(html, terms) {
 }
 
 // ---------------------------------------------------------------- data + search index
-const DB = { dict: [], index: [], grammar: [], notes: [], morph: [], att: { stems: {}, affix: {}, words: {} }, labels: {} };
+const DB = { dict: [], index: [], grammar: [], notes: [], morph: [], att: { stems: {}, affix: {}, words: {} }, labels: {},
+  dl: { ety: {}, derived: {}, partmean: {} }, examples: [] };
 // grammar labels (CMPL, REM, ERG…) -> plain words ("completed action", "remote past", "doer marker")
 function plainLabel(g) {
   const one = (p) => {
@@ -165,6 +166,18 @@ function buildMorph() {
     const n = Object.values(gl).reduce((a, b) => a + b, 0);
     addTo(AFFIX, f, { k: 'att', form: f, gl, n });
   }
+  for (const [f, list] of Object.entries(DB.dl.derived || {})) for (const d of list) addTo(STEMS, f, { k: 'derived', form: f, ...d });
+  for (const [f, gl] of Object.entries(DB.dl.partmean || {})) {
+    const g = Object.entries(gl).sort((a, b) => b[1] - a[1])[0][0];
+    if (STEMS.has(f) || AFFIX.has(f)) continue;               // only fill gaps; don't override better sources
+    addTo(STEMS, f, { k: 'etyp', form: f, meaning: g.replace(/^(suf\.|pref\.)\s*(of\s*)?/, ''), n: 1 });
+  }
+  // words you described in your own dictionary entries
+  for (const n of DB.notes) if (n.entry && n.entry.root) {
+    const e = n.entry; const f = fold(e.root).replace(/[^a-zñ]/g, '');
+    if (e.type === 'ending') addTo(AFFIX, f, { k: 'taught', form: e.root, meaning: e.meaning, n });
+    else addTo(STEMS, f, { k: 'taught', form: e.root, meaning: e.meaning, n, verb: e.type === 'verb', whole: false, entry: e });
+  }
   PREFIX = new Map();
   for (const m of DB.morph) if (m.side === 'prefix') for (const k of m.keys) addTo(PREFIX, k, { k: 'morph', m });
   for (const e of DB.dict) { const raw = fold(e.h).replace(/[*]/g, '').trim(); if (/^[a-zñ]{1,3}[-–]$/.test(raw)) addTo(PREFIX, raw.replace(/[-–]$/, ''), { k: 'dict', e }); }
@@ -250,6 +263,9 @@ function analyzeAll(word, limit = 10) {
   }
   const tw = TAUGHT_WORDS.get(w);
   if (tw) cands.push({ root: tw.parts[0].form && fold(tw.parts[0].form).replace(/[^a-zñ]/g, ''), endings: tw.parts.slice(1).map((p) => fold(p.form).replace(/[^a-zñ]/g, '')), cost: -W.seen - 2, taughtSplit: tw });
+  const ety = (DB.dl.ety || {})[w];
+  if (ety && ety.split) { const ps = ety.split.split('-');
+    cands.push({ root: ps[0], endings: ps.slice(1), cost: -W.seen + 0.5, etyRec: ety }); }
   const seenW = (DB.att.words || {})[w];
   if (seenW) { const ps = seenW.split.split('-');
     cands.push({ root: ps[0], endings: ps.slice(1), cost: -W.seen, author: seenW }); }
@@ -262,7 +278,7 @@ function analyzeAll(word, limit = 10) {
   for (const c of cands) {
     const r = c.pre ? { root: c.pre + '-' + c.root, prefix: c.pre, stem: c.root, endings: c.endings, cost: c.cost } : { ...c };
     const key = (r.prefix ? r.prefix + '+' : '') + (r.root || '') + '|' + r.endings.join('-');
-    if (seen.has(key)) { const prev = out.find((x) => (x.prefix ? x.prefix + '+' : '') + (x.root || '') + '|' + x.endings.join('-') === key); if (prev && c.author) prev.author = c.author; if (prev && c.taughtSplit) prev.taughtSplit = c.taughtSplit; continue; }
+    if (seen.has(key)) { const prev = out.find((x) => (x.prefix ? x.prefix + '+' : '') + (x.root || '') + '|' + x.endings.join('-') === key); if (prev && c.author) prev.author = c.author; if (prev && c.taughtSplit) prev.taughtSplit = c.taughtSplit; if (prev && c.etyRec) prev.etyRec = c.etyRec; continue; }
     seen.add(key); out.push(r);
     if (out.length === limit) break;
   }
@@ -281,12 +297,14 @@ function rootKind(root) { // 'verb' | 'noun' | '' — used to choose the fitting
 }
 function pieceInfo(form, isRoot, ctx = '') {
   const seen = new Set();
-  const list = ((isRoot === 'pre' ? PREFIX : isRoot ? STEMS : AFFIX).get(form) || []).filter((x) => { const key = x.k + (x.k === 'att' ? 'a' + x.form : x.e ? 'e' + x.e.i : x.g ? 'g' + x.g.i : x.m ? 'm' + x.m.display + x.m.gloss : x.k === 'taught' ? 't' + fold(x.form) + '|' + x.meaning : 'n' + x.n.id);
+  const list = ((isRoot === 'pre' ? PREFIX : isRoot ? STEMS : AFFIX).get(form) || []).filter((x) => { const key = x.k + (x.k === 'derived' ? 'd' + x.from + x.form : x.k === 'etyp' ? 'p' + x.form : x.k === 'att' ? 'a' + x.form : x.e ? 'e' + x.e.i : x.g ? 'g' + x.g.i : x.m ? 'm' + x.m.display + x.m.gloss : x.k === 'taught' ? 't' + fold(x.form) + '|' + x.meaning : 'n' + x.n.id);
     if (seen.has(key)) return false; seen.add(key); return true; });
   const fits = (x) => x.k === 'morph' && ctx && (ctx === 'verb' ? /^verb/.test(x.m.attaches) : /^noun/.test(x.m.attaches)) ? 1.5 : 0;
-  const rank = (x) => (x.k === 'taught' ? 5 : x.k === 'morph' ? (x.m.gloss ? 3 : 2) : x.k === 'dict' ? 1 : x.k === 'att' ? (isRoot ? (x.n >= 3 && !/^[A-Z]/.test(x.meaning) ? 4.8 : /^[A-Z]/.test(x.meaning) ? -0.5 : 0.5) : -1) : 0) + fits(x);   // a root glossed 3+ times in the examples beats a look-alike dictionary word
+  const rank = (x) => (x.k === 'taught' ? 5 : x.k === 'derived' ? 0.95 : x.k === 'etyp' ? 0.8 : x.k === 'morph' ? (x.m.gloss ? 3 : 2) : x.k === 'dict' ? 1 : x.k === 'att' ? (isRoot ? (x.n >= 3 && !/^[A-Z]/.test(x.meaning) ? 4.8 : /^[A-Z]/.test(x.meaning) ? -0.5 : 0.5) : -1) : 0) + fits(x);   // a root glossed 3+ times in the examples beats a look-alike dictionary word
   list.sort((a, b) => rank(b) - rank(a) || ((b.n && b.n.updated) || 0) - ((a.n && a.n.updated) || 0));
-  return list.slice(0, 3).map((x) => x.k === 'att' ? (x.gl ? { label: '-' + x.form + ' in the grammar examples', text: ' : ' + Object.entries(x.gl).map(([g, n]) => `${plainLabel(g)} (${n}×)`).join(', '), ref: x, att: x }
+  return list.slice(0, 3).map((x) => x.k === 'derived' ? { label: `${x.from} without ${x.drop} (${x.dropg})`, text: ' : ' + x.mean, ref: x, derived: x }
+    : x.k === 'etyp' ? { label: x.form + ' (from the dictionary\'s word histories)', text: ' : ' + x.meaning, ref: x, etyp: x }
+    : x.k === 'att' ? (x.gl ? { label: '-' + x.form + ' in the grammar examples', text: ' : ' + Object.entries(x.gl).map(([g, n]) => `${plainLabel(g)} (${n}×)`).join(', '), ref: x, att: x }
       : { label: x.form + ' in the grammar examples', text: ' : ' + plainLabel(x.meaning), ref: x, att: x }) : x.k === 'taught' ? { label: x.form + ' (taught by you)', text: ' : ' + x.meaning, ref: x, taught: true } : x.k === 'dict' ? { label: x.e.h, text: x.e.t, ref: x } :
     x.k === 'gram' ? { label: '§' + x.g.s + ' ' + x.g.h, text: '', ref: x } :
     x.k === 'morph' ? { label: `${x.m.gloss ? plainLabel(x.m.gloss) : x.m.display}${x.m.sections[0] ? ' (grammar §' + x.m.sections[0] + ')' : ''}`, text: ' : ' + x.m.meaning, ref: x, morph: x.m } : { label: x.n.ship, text: x.n.mean, ref: x });
@@ -318,7 +336,7 @@ function breakdownFor(q) {
 function glossOf(f, isRoot, ctx = '') {
   const tg = ((isRoot === 'pre' ? PREFIX : isRoot ? STEMS : AFFIX).get(f) || []).filter((x) => x.k === 'taught')
     .sort((a, b) => (b.n.updated || 0) - (a.n.updated || 0))[0];   // the newest correction wins
-  if (tg) return tg.meaning;                       // what the user taught always wins
+  if (tg) return isRoot ? tg.meaning.replace(/^to\s+/i, '') : tg.meaning;   // what the user taught always wins
   if (!isRoot) { // most frequent reading in the grammar's examples, unless context picks a grammar reading
     const a = (AFFIX.get(f) || []).find((x) => x.k === 'att');
     if (a) { const L = Object.entries(a.gl).sort((x, y) => y[1] - x[1]);
@@ -327,11 +345,18 @@ function glossOf(f, isRoot, ctx = '') {
   }
   const inf = pieceInfo(f, isRoot, ctx)[0]; if (!inf) return '?';
   if (inf.att && isRoot) return plainLabel(inf.att.meaning);
+  if (inf.derived) return inf.derived.mean.split(/[(;,]/)[0].trim().slice(0, 40);
+  if (inf.etyp) return inf.etyp.meaning.split(/[(;,]/)[0].trim().slice(0, 30);
   if (inf.taught) return inf.text.replace(/^ : /, '').split(/[;,]/)[0].trim();
   if (inf.morph && inf.morph.gloss) return plainLabel(inf.morph.gloss);
   if (inf.morph) return inf.morph.meaning.split(/[\/;,(]/)[0].trim().slice(0, 30);
   const g = shortGloss(inf.text).split(/[;,]/)[0].replace(/^to /, '').replace(/\s+\d+$/, '').trim();
   return (g || inf.label).slice(0, 30);
+}
+function shortPart(p) { // a part of a word history -> a short gloss ("suf. of completed action" -> CMPL when known)
+  const f = fold(p.f).replace(/[^a-zñ]/g, '');
+  if (p.f.trim().startsWith('-')) { const L = AFFIX.get(f); if (L && L.some((x) => x.k === 'att' || x.k === 'morph')) return labelOf(f, false); }
+  return (p.g || f).replace(/^(suf\.|pref\.|modifying|verbal|noun)\s*(suf\.\s*)?(of\s*)?/i, '').split(/[,;]/)[0].trim().replace(/\s+/g, '.') || f;
 }
 function labelOf(f, isRoot, ctx = '') {
   if (isRoot) return glossOf(f, isRoot, ctx);
@@ -355,6 +380,8 @@ function interlinear(a) {
   const parts = partsOf(a);
   if (a.taughtSplit) return { top: a.taughtSplit.parts.map((p) => p.form).join('-'),
     bottom: glossJoin(a.taughtSplit.parts.map((p, i) => [p.meaning || '?', i === 0])), note: 'as you taught it' + (a.taughtSplit.meaning ? ` — “${a.taughtSplit.meaning}”` : '') };
+  if (a.etyRec && !a.author) return { top: a.etyRec.split, bottom: a.etyRec.parts.map((p) => shortPart(p)).join('-'),
+    note: `the dictionary's word history of ${a.etyRec.h}: “${a.etyRec.mean}”` };
   if (a.author) return { top: a.author.split, bottom: a.author.gloss, note: 'as analysed in the grammar, p. ' + a.author.page };
   const ctx = a.root ? rootKind(a.stem || a.root) : '';
   return { top: parts.map(([f]) => f).join('-'), bottom: glossJoin(parts.map(([f, r]) => [r === true && a.unknown ? '?' : labelOf(f, r, ctx), r === true])) };
@@ -374,6 +401,9 @@ function relatedLine(a) {
 function guessReason(a) { // a few plain words on where this analysis comes from
   if (a.taughtSplit) return 'as you taught it';
   if (a.author) return `the grammar's own analysis (p. ${a.author.page})`;
+  if (a.etyRec) return `the dictionary's word history of ${a.etyRec.h}`;
+  { const d = (STEMS.get(partsOf(a).find(([, r]) => r === true)?.[0]) || []).find((x) => x.k === 'derived');
+    if (d) return `root “${d.form}” = ${d.from} “${d.mean}” without ${d.drop} (${d.dropg})`; }
   const parts = partsOf(a); const root = parts.find(([, r]) => r === true);
   const src = (L) => { const k = new Set(L.map((x) => x.k)); return k.has('taught') ? 'your notes' : k.has('dict') ? 'the dictionary' : k.has('att') ? 'the grammar examples' : k.has('morph') ? 'the grammar' : k.has('note') ? 'your notes' : 'a guess'; };
   if (!root) return 'endings only — no root found';
@@ -397,6 +427,7 @@ function breakdownHtml(bd) {
         <span class="tiny" style="display:block">≈ ${esc(readingOf(a))}</span>
         <span class="tiny" style="display:block;color:var(--muted)">${esc(guessReason(a))}</span>
         ${relatedLine(a) ? `<span class="tiny" style="display:block;color:var(--muted)">${esc(relatedLine(a))}</span>` : ''}
+        ${a.root ? `<button class="btn ghost small explainBtn" data-root="${esc(a.stem || a.root)}" data-wi="${wi}" data-k="${k}" style="margin-top:4px">＋ Explain “${esc(a.stem || a.root)}” in my dictionary</button>` : ''}
         ${a.root ? `<input class="root-mean" data-wi="${wi}" data-k="${k}" hidden placeholder="meaning of “${esc(a.stem || a.root)}” here${unknownRoot ? '' : ' (optional — leave empty to keep the dictionary meaning)'}">` : ''}</span></label>`;
     }).join('');
     return `<div class="wb" data-wi="${wi}"><div class="src" style="margin-top:10px">${esc(word)} — ${analyses.length} possible split${analyses.length === 1 ? '' : 's'}</div>${opts}
@@ -574,6 +605,7 @@ function contextFor(hits, budget = 5500) {
     if (d.k === 'dict') t = `[Dictionary] ${d.ref.h}: ${d.ref.t.replace(/\*+/g, '')}`;
     else if (d.k === 'index') t = `[English→Shipibo] ${d.ref.e}: ${d.ref.t}`;
     else if (d.k === 'gram') t = `[${d.ref.src === 'sketch' ? 'Dictionary grammar sketch' : 'Grammar'} ${d.ref.s} ${d.ref.h}] ${d.ref.t}`;
+    else if (d.ref.entry) t = `[User's own dictionary entry] ${d.ref.entry.root} (${d.ref.entry.type}): ${d.ref.entry.meaning}. ${d.ref.entry.explain}` + (d.ref.entry.ex && d.ref.entry.ex.s ? ` Example: ${d.ref.entry.ex.s} = ${d.ref.entry.ex.e}` : '');
     else t = `[User's own notes] Shipibo: ${d.ref.ship} | Meaning: ${d.ref.mean} | Context: ${d.ref.ctx}` +
       ((d.ref.pieces || []).length ? ' | Word by word: ' + d.ref.pieces.map((w) => `${w.word} = ${(w.parts || []).map((p) => p.form + (p.meaning ? ' (' + p.meaning + ')' : '')).join(' + ')}${w.meaning ? ' → ' + w.meaning : ''}`).join('; ') : '');
     t = t.slice(0, 1600);
@@ -591,6 +623,7 @@ Rules:
 - Prefer the user's own notes when they are relevant, and say when you are using them.
 - Keep answers short and clear (a few sentences), in simple English.
 - When the question contains Shipibo words and a word breakdown is given, START with one line "Quick read:" giving the split and gloss of the whole phrase (like "jakoni-ra kano-ke = well-EV connect-CMPL"), then one short line per word explaining its parts in plain words, then a brief explanation of what it probably means. Mention other possible splits when they are plausible. Say clearly when it is a guess.
+- Use the related dictionary entries and example sentences to work out what an unfamiliar word means in context. If a word contains a dictionary word (for example with a prefix dropped, like keiba from bekeiba without be- 'with'), say so and use that meaning; combine the parts to explain the whole phrase.
 - When asked to list things (all verbal suffixes, all words for X…), list ALL of the matching items from the material, not just a few.`;
 
 async function aiAnswer(q, hits, bdText = '') {
@@ -615,6 +648,60 @@ function openTeach(words, question) {
   if (words) renderPieces(proposePieces(words));
   window.scrollTo(0, 0);
   const first = document.querySelector('#nPieces .p-mean') || $('#nMean'); if (first) first.focus();
+}
+// ---------------------------------------------------------------- what the dictionary shows about a word
+const EN_STOP = new Set(('the a an of to in on at for from by with and or but is are was were be been it its this that these those he she they ' +
+  'we you i me my his her their our your him them us not no so as into up out over there here then than when where who what which will would can ' +
+  'could did does do has have had am very just about one some all said say says going went go come came get got').split(' '));
+let EN_DF = new Map();
+function userExamples() {   // your taught phrases and the examples in your dictionary entries also count as examples
+  const out = [];
+  for (const n of DB.notes) {
+    if (n.ship && n.mean) out.push({ s: n.ship, e: n.mean, w: [...new Set(tokens(n.ship))], mine: true });
+    if (n.entry && n.entry.ex && n.entry.ex.s) out.push({ s: n.entry.ex.s, e: n.entry.ex.e || '', w: [...new Set(tokens(n.entry.ex.s))], mine: true });
+  }
+  return out;
+}
+function wordContext(word, a) {
+  const w = fold(word).replace(/[^a-zñ]/g, '');
+  const rootP = a ? partsOf(a).find(([, r]) => r === true) : null; const root = rootP ? fold(rootP[0]).replace(/[^a-zñ]/g, '') : '';
+  const rel = []; const seenI = new Set();
+  const add = (e, why) => { if (!e || seenI.has(e.i)) return; seenI.add(e.i); rel.push({ e, why }); };
+  for (const e of DB.dict) { if (/name of the letter/.test(e.t)) continue; const h = fold(e.h).replace(/[^a-zñ]/g, '');   // dictionary words inside this word
+    if (h.length >= 4 && h !== w && w.includes(h)) add(e, `contains ${e.h}`); }
+  for (const [f, list] of Object.entries(DB.dl.derived || {})) if (f.length >= 4 && w.includes(f))   // …also with a prefix dropped
+    for (const d of list) add(DB.dict[d.i], `contains “${f}” = ${d.from} without ${d.drop} (${d.dropg})`);
+  for (let k = Math.min(6, w.length - 2); k >= 3 && rel.length < 8; k--) {                           // entries that mention its ending
+    const re = new RegExp('[-–]' + w.slice(-k) + '(?![a-zñ])');
+    for (const e of DB.dict) if (re.test(fold(e.t.replace(/\*/g, '')))) add(e, `mentions the ending -${w.slice(-k)}`);
+  }
+  if (root.length >= 4) for (const e of DB.dict) { const h = fold(e.h).replace(/[^a-zñ]/g, '');      // longer words built on the root
+    if (h !== w && h.startsWith(root)) add(e, `built on ${root}`); if (rel.length >= 10) break; }
+  const ex = [];
+  for (const x of [...userExamples(), ...DB.examples]) {
+    if (x.w.some((t) => t === w || (w.length >= 5 && t.includes(w)) || (w.length < 5 && t.startsWith(w) && t.length <= w.length + 4)
+      || (root.length >= 4 && t.startsWith(root)) || (w.length >= 6 && t.includes(w.slice(0, 5))))) ex.push(x);
+    if (ex.length >= 40) break;
+  }
+  const cnt = new Map();
+  for (const x of ex) for (const t of new Set(tokens(x.e))) if (!EN_STOP.has(t) && !STOP.has(t) && t.length > 2) cnt.set(t, (cnt.get(t) || 0) + 1);
+  const co = [...cnt.entries()].filter(([, c]) => c >= 2 || ex.length <= 3).map(([t, c]) => [t, c / Math.log2(2 + (EN_DF.get(t) || 0))])
+    .sort((x, y) => y[1] - x[1]).slice(0, 8).map(([t]) => t);
+  return { word, rel: rel.slice(0, 8), ex: ex.slice(0, 6), exN: ex.length, co };
+}
+function contextCard(ctxs) {
+  const blocks = ctxs.filter((c) => c.rel.length || c.ex.length).map((c) => `<div style="margin-top:10px"><span class="hw">${esc(c.word)}</span>
+    ${c.rel.map((r) => `<div class="entry" style="margin:5px 0 5px 8px"><span class="tiny">${esc(r.why)}:</span><br><span class="hw" style="font-size:15px">${esc(r.e.h)}</span> ${md(r.e.t.slice(0, 260))}${r.e.t.length > 260 ? '…' : ''}</div>`).join('')}
+    ${c.ex.length ? `<div class="tiny" style="margin:6px 0 2px 8px">Used in ${c.exN} example sentence${c.exN === 1 ? '' : 's'}${c.co.length ? ` — their translations often have: <b>${esc(c.co.join(', '))}</b>` : ''}</div>` +
+      c.ex.map((x) => `<div class="entry" style="margin:3px 0 3px 8px"><span class="ex"><b>${esc(x.s)}</b> ${esc(x.e)}${x.mine ? ' <span class="taught">yours</span>' : ''}</span></div>`).join('') : ''}</div>`).join('');
+  return blocks ? `<div class="card"><div class="src">What the dictionary shows about these words</div>${blocks}</div>` : '';
+}
+function contextText(ctxs) {
+  return ctxs.map((c) => [
+    ...c.rel.map((r) => `[Related dictionary entry for ${c.word} — it ${r.why}] ${r.e.h}: ${r.e.t.replace(/\*+/g, '').slice(0, 300)}`),
+    ...c.ex.slice(0, 3).map((x) => `[Example sentence related to ${c.word}] ${x.s} = ${x.e}`),
+    c.co.length ? `[Words that often appear in translations of sentences with ${c.word}] ${c.co.join(', ')}` : '',
+  ].filter(Boolean).join('\n')).filter(Boolean).join('\n');
 }
 // ---------------------------------------------------------------- list requests ("list all verbal suffixes")
 const LIST_KINDS = [
@@ -682,13 +769,14 @@ async function askInner(q) {
   const { intent: it, hits, breakdown } = retrieve(q);
   lastAsk = { q, words: breakdown.map((x) => x.word).join(' ') || (it.type === 'sh2en' ? it.term : '') };
   const terms = qtokens(it.term);
-  $('#askResults').innerHTML = breakdownHtml(breakdown) + (hits.length ? `<div class="src" style="margin-top:12px">Sources (${hits.length})</div>` +
+  const ctxs = breakdown.map((x) => wordContext(x.word, x.analyses[0]));
+  $('#askResults').innerHTML = breakdownHtml(breakdown) + contextCard(ctxs) + (hits.length ? `<div class="src" style="margin-top:12px">Sources (${hits.length})</div>` +
     hits.map((h) => resultCard(h, terms)).join('') : `<div class="empty">Nothing found in the dictionary, grammar or your notes.</div>`);
   bdPhraseUpdate();
   const card = $('#answerCard');
   try {
     const eng = engine || (LS.get('autoAI', false) ? await startAI() : null);
-    if (eng && hits.length) { card.hidden = false; await aiAnswer(q, hits, breakdownContext(breakdown)); }
+    if (eng && (hits.length || ctxs.length)) { card.hidden = false; await aiAnswer(q, hits, [breakdownContext(breakdown), contextText(ctxs)].filter(Boolean).join('\n').slice(0, 3200)); }
     else if (hits.length) {
       card.hidden = false; $('#answer').classList.remove('thinking');
       const top = hits[0].d;
@@ -799,6 +887,7 @@ function noteHtml(n, withActions = true) {
     ${(n.pieces || []).length ? `<div class="tiny" style="margin:4px 0">${n.pieces.map((w) => `<b>${esc(w.word)}</b> = ${(w.parts || []).map((p, i) => `${i ? '-' : ''}${esc(p.form)}${p.meaning ? ` <i>(${esc(p.meaning)})</i>` : ''}`).join(' ')}${w.meaning ? ` → “${esc(w.meaning)}”` : ''}`).join('<br>')}</div>` : ''}
     ${n.mean ? `<div><b>Meaning:</b> ${esc(n.mean)}</div>` : ''}
     ${n.builtin ? '<span class="taught">taught together before install</span>' : ''}
+    ${n.entry ? `<div class="tiny"><span class="taught">my dictionary · ${esc(n.entry.type)}</span>${n.entry.related && n.entry.related.length ? ' related: ' + n.entry.related.map(esc).join(', ') : ''}${n.entry.ex && n.entry.ex.s ? `<br><span class="ex"><b>${esc(n.entry.ex.s)}</b> ${esc(n.entry.ex.e)}</span>` : ''}</div>` : ''}
     ${n.ctx ? `<div class="muted">${esc(n.ctx)}</div>` : ''}
     ${(n.tags || []).length ? `<div class="tiny">${n.tags.map(esc).join(' · ')}</div>` : ''}
     <div class="tiny">${new Date(n.updated || n.created).toLocaleString()}</div>
@@ -852,6 +941,39 @@ async function onNotesClick(e) {
     DB.notes = await idb.all(); buildIndex(); renderNotes(); }
 }
 
+// ---------------------------------------------------------------- my dictionary entries
+function guessType(meaning, explain) {
+  const m = (meaning || '').trim().toLowerCase(); const x = (explain || '').toLowerCase();
+  if (/^-/.test(meaning || '') || /\b(ending|suffix)\b/.test(x)) return 'ending';
+  if (/^to\s+\w/.test(m) || /\bverb\b/.test(x)) return 'verb';
+  if (/^(a|an|the)\s+\w/.test(m) || /\bnoun\b|\bthing\b|\bplace\b|\bperson\b/.test(x)) return 'noun';
+  if (/\b(adjective|describ)/.test(x)) return 'describing';
+  return '';
+}
+function openEntry(root, meaning, question) {
+  document.querySelector('nav button[data-v="teach"]').click();
+  $('#entryCard').open = true;
+  $('#eRoot').value = root || ''; $('#eMean').value = meaning || ''; $('#eExplain').value = question ? `Heard in: “${question}”\n` : '';
+  $('#eType').value = guessType(meaning, '') || ''; $('#eExS').value = ''; $('#eExE').value = '';
+  $('#entryCard').scrollIntoView(); ($('#eMean').value ? $('#eExplain') : $('#eMean')).focus();
+}
+async function saveEntry() {
+  const root = $('#eRoot').value.trim(); const meaning = $('#eMean').value.trim();
+  if (!root || !meaning) { alert('Write the word and what it means.'); return; }
+  const explain = $('#eExplain').value.trim();
+  const type = $('#eType').value || guessType(meaning, explain) || 'other';
+  // Shipibo words mentioned in the explanation that the dictionary knows -> linked as related words
+  const related = [...new Set((explain.match(/[A-Za-zÀ-ÿñÑ]+/g) || []).map((w) => fold(w)).filter((w) => w.length >= 3 && !STOP.has(w) && !EN_STOP.has(w)
+    && DB.dict.some((e) => fold(e.h).replace(/[^a-zñ]/g, '') === w)))].slice(0, 8);
+  const now = Date.now();
+  const entry = { root, meaning, type, explain, related, ex: { s: $('#eExS').value.trim(), e: $('#eExE').value.trim() } };
+  await idb.put({ id: 'n' + now.toString(36) + Math.random().toString(36).slice(2, 6), created: now, updated: now,
+    ship: root, mean: meaning, ctx: explain, tags: ['my dictionary', type], entry,
+    pieces: [{ word: root, meaning, parts: [{ form: fold(root).replace(/[^a-zñ]/g, ''), kind: type === 'ending' ? 'suffix' : 'root', meaning, verb: type === 'verb' }] }] });
+  DB.notes = await idb.all(); buildIndex(); renderNotes();
+  ['#eRoot', '#eMean', '#eExplain', '#eExS', '#eExE'].forEach((x) => ($(x).value = '')); $('#eType').value = '';
+  alert(`Added “${root}” to your dictionary (${type}). It is used from now on to read new words.`);
+}
 // ---------------------------------------------------------------- backup
 const b64 = (blob) => new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
 async function exportBackup() {
@@ -920,6 +1042,8 @@ async function boot() {
   Object.assign(DB, { dict, index, grammar, notes });
   try { DB.morph = await fetch('data/morphemes.json').then((r) => r.json()); } catch { DB.morph = []; }
   try { DB.labels = await fetch('data/labels.json').then((r) => r.json()); } catch { DB.labels = {}; }
+  try { DB.dl = await fetch('data/dictlearn.json').then((r) => r.json()); } catch {}
+  try { DB.examples = await fetch('data/examples.json').then((r) => r.json()); } catch { DB.examples = []; }
   try { const att = new URLSearchParams(location.search).get('att') || 'attested.json';
     DB.att = await fetch('data/' + att).then((r) => r.json()); } catch {}
   // teachings we prepared together before install: upserted by id, version-tracked
@@ -931,6 +1055,7 @@ async function boot() {
     }
   } catch {}
   buildIndex();
+  EN_DF = new Map(); for (const x of DB.examples) for (const t of new Set(tokens(x.e))) EN_DF.set(t, (EN_DF.get(t) || 0) + 1);
   // ask
   const ex = ['How do you say "river"?', 'What does jáskati mean?', 'What does -ra mean?', 'How do I give a command?', 'How do you say "thank you"?'];
   $('#examples').innerHTML = ex.map((x) => `<button class="chip">${esc(x)}</button>`).join('');
@@ -938,7 +1063,10 @@ async function boot() {
   $('#askBtn').onclick = ask;
   $('#fixAnswer').onclick = () => openTeach(lastAsk.words, lastAsk.q);
   $('#askResults').addEventListener('click', (e) => { const b = e.target.closest('.fixBd'); if (b) openTeach(b.dataset.words, lastAsk.q);
-    if (e.target.closest('#bdSave')) bdSave(lastAsk.q); });
+    if (e.target.closest('#bdSave')) bdSave(lastAsk.q);
+    const ex = e.target.closest('.explainBtn'); if (ex) { e.preventDefault();
+      const typed = (document.querySelector(`.root-mean[data-wi="${ex.dataset.wi}"][data-k="${ex.dataset.k}"]`) || {}).value || '';
+      openEntry(ex.dataset.root, typed, lastAsk.q); } });
   $('#askResults').addEventListener('change', (e) => { if (!e.target.matches('#bdCard input[type=radio]')) return;
     const wb = e.target.closest('.wb'); wb.querySelectorAll('.root-mean').forEach((i) => { i.hidden = i.dataset.k !== e.target.value; });
     bdPhraseUpdate(); }); $('#q').onkeydown = (e) => { if (e.key === 'Enter') ask(); };
@@ -948,7 +1076,10 @@ async function boot() {
   gramToc(); $('#gramToc').onclick = (e) => { const a = e.target.closest('a'); if (a) { e.preventDefault(); gramRead(a.dataset.s); } };
   // notes
   $('#bdBtn').onclick = () => { const t = $('#nShip').value.trim(); if (!t) { alert('Write the Shipibo first.'); return; } renderPieces(proposePieces(t, readPieces(true).filter((w) => !w.guessed))); };
-  $('#saveNote').onclick = saveNote; $('#cancelNote').onclick = resetForm; $('#recBtn').onclick = toggleRec;
+  $('#saveNote').onclick = saveNote;
+  $('#eSave').onclick = saveEntry;
+  $('#eMean').oninput = () => { if (!$('#eType').dataset.touched) $('#eType').value = guessType($('#eMean').value, $('#eExplain').value); };
+  $('#eType').onchange = () => { $('#eType').dataset.touched = '1'; }; $('#cancelNote').onclick = resetForm; $('#recBtn').onclick = toggleRec;
   $('#notesList').onclick = onNotesClick; $('#nq').oninput = renderNotes; renderNotes();
   // setup
   const cm = LS.get('customModel', null);
